@@ -1,0 +1,75 @@
+data_root: null
+output_dir: outputs
+image_size: 256
+num_classes: 4
+in_channels: 1
+batch_size: 8
+epochs: 100
+lr: 0.0003
+weight_decay: 0.0001
+model: baseline_unet
+loss: dice_ce
+optimizer: adamw
+scheduler: cosine
+use_mixed_precision: true
+use_postprocessing: true
+use_synthetic: false
+synthetic_data_root: null
+synthetic_ratio: 0.25
+synthetic_mode: mixed_real_synthetic
+temporal_window: 1
+temporal_attention: false
+num_workers: 2
+seed: 42
+fold: 0
+num_folds: 5
+train_fraction: 0.8
+val_fraction: 0.1
+split_file: null
+resume: null
+device: auto
+save_overlay_examples: true
+
+model_params:
+  base_channels: 32
+  batch_norm: true
+  dropout: 0.1
+
+augmentation:
+  enabled: true
+  horizontal_flip: false
+  horizontal_flip_prob: 0.5
+  rotation_degrees: 12
+  scale_range: [0.9, 1.1]
+  random_crop_prob: 0.25
+  random_crop_size: [224, 224]
+  brightness: 0.12
+  contrast: 0.12
+  gaussian_noise_std: 0.02
+  speckle_noise_std: 0.08
+  gain_range: [0.85, 1.15]
+  acoustic_shadow_prob: 0.25
+  acoustic_shadow_strength: [0.25, 0.75]
+  elastic_prob: 0.2
+  elastic_alpha: 12.0
+  elastic_sigma: 5.0
+  blur_prob: 0.15
+  blur_sigma_range: [0.3, 1.2]
+  gamma_range: [0.8, 1.25]
+
+preprocessing:
+  normalize: minmax
+  z_score: false
+  class_mapping: null
+
+postprocessing:
+  keep_largest_component: true
+  fill_holes: true
+  min_region_size: 64
+  smooth_boundaries: false
+
+clinical:
+  lv_class: 1
+  myocardium_class: 2
+  la_class: 3
+  area_volume_coefficient: 0.85
