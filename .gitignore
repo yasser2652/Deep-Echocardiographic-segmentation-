@@ -1,4 +1,5 @@
 outputs/
+data/
 checkpoints/
 *.ckpt
 *.pth
@@ -19,4 +20,3 @@ htmlcov/
 *.raw
 .venv/
 venv/
-

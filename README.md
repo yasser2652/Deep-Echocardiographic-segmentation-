@@ -24,6 +24,10 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+## Google Colab
+
+For GPU training in Colab, use [COLAB.md](COLAB.md) and [notebooks/colab_train_test.ipynb](notebooks/colab_train_test.ipynb). The notebook mounts Google Drive, clones this repository, installs Colab-safe dependencies, runs tests, trains, evaluates, and saves checkpoints to Drive.
+
 ## Prepare CAMUS
 
 Download CAMUS manually from the official challenge/dataset source, accept its license, and point `data_root` in `config.yaml` or pass `--data-root`.
