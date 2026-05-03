@@ -38,8 +38,13 @@ In Colab:
 After cloning the repo in Colab:
 
 ```bash
+cd /content
+git clone https://github.com/yasser2652/Deep-Echocardiographic-segmentation-.git /content/DeepEchoSeg
+cd /content/DeepEchoSeg
 PYTHONDONTWRITEBYTECODE=1 pytest -q tests
 ```
+
+If Colab says `getcwd: cannot access parent directories`, run `cd /content` or restart the runtime before recloning. This happens when the notebook deletes the folder it was currently inside.
 
 Train:
 
@@ -73,4 +78,3 @@ python -m src.evaluate \
 - Colab already includes PyTorch, so the notebook installs the medical-imaging and utility dependencies without reinstalling `torch`.
 - Keep outputs in Google Drive so checkpoints survive runtime resets.
 - CAMUS is not bundled with this repository. You must download it separately and follow its license.
-
