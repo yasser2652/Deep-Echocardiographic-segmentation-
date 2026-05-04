@@ -5,7 +5,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from src.dataset import build_datasets, create_dummy_camus_dataset, discover_camus_samples
+from src.dataset import build_datasets, create_dummy_camus_dataset, discover_camus_samples, discover_image_mask_samples
 from src.losses import build_loss
 from src.model_registry import build_model_from_config
 from src.train import make_grad_scaler, train_one_epoch, validate
@@ -61,3 +61,29 @@ def test_dummy_dataset_and_one_epoch_training():
     assert loss >= 0
     assert val_loss >= 0
     assert 0.0 <= metrics["mean_dice"] <= 1.0
+
+
+def test_generic_image_mask_layout():
+    root = artifact_dir("generic") / "data"
+    images = root / "train" / "images"
+    masks = root / "train" / "masks"
+    images.mkdir(parents=True)
+    masks.mkdir(parents=True)
+    Image.fromarray((torch.rand(32, 32).numpy() * 255).astype("uint8")).save(images / "sample001.png")
+    Image.fromarray(torch.randint(0, 4, (32, 32), dtype=torch.uint8).numpy()).save(masks / "sample001_mask.png")
+
+    samples = discover_image_mask_samples(root, split="train", require_masks=True)
+    assert len(samples) == 1
+    config = {
+        "data_root": str(root),
+        "dataset_name": "generic",
+        "image_size": 32,
+        "num_classes": 4,
+        "augmentation": {"enabled": False},
+        "preprocessing": {"normalize": "minmax", "z_score": False, "class_mapping": None},
+    }
+    datasets = build_datasets(config, require_masks=True)
+    image, mask, metadata = datasets["train"][0]
+    assert image.shape == (1, 32, 32)
+    assert mask.shape == (32, 32)
+    assert metadata["patient_id"]

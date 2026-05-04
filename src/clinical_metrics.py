@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg", force=True)
-import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image, ImageDraw
 from scipy import stats
 
 
@@ -148,15 +146,53 @@ def save_bland_altman_plot(predicted: np.ndarray, reference: np.ndarray, path: s
     diff = predicted[valid] - reference[valid]
     bias = np.mean(diff) if diff.size else np.nan
     sd = np.std(diff, ddof=1) if diff.size > 1 else 0.0
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.scatter(mean, diff, s=24, alpha=0.75)
-    ax.axhline(bias, color="black", linestyle="-", label="Bias")
-    ax.axhline(bias + 1.96 * sd, color="tab:red", linestyle="--", label="95% limits")
-    ax.axhline(bias - 1.96 * sd, color="tab:red", linestyle="--")
-    ax.set_title(title)
-    ax.set_xlabel("Mean")
-    ax.set_ylabel("Prediction - reference")
-    ax.legend(loc="best")
-    fig.tight_layout()
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
+    width, height = 960, 640
+    margin_left, margin_top, margin_right, margin_bottom = 90, 70, 40, 80
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    plot = (margin_left, margin_top, width - margin_right, height - margin_bottom)
+    draw.rectangle(plot, outline=(30, 30, 30), width=2)
+    draw.text((margin_left, 25), title, fill=(20, 20, 20))
+    draw.text((width // 2 - 30, height - 38), "Mean", fill=(20, 20, 20))
+    draw.text((15, height // 2), "Pred - ref", fill=(20, 20, 20))
+
+    if mean.size:
+        x_min, x_max = float(np.min(mean)), float(np.max(mean))
+        y_values = np.concatenate([diff, np.array([bias, bias + 1.96 * sd, bias - 1.96 * sd])])
+        y_values = y_values[np.isfinite(y_values)]
+        y_min, y_max = float(np.min(y_values)), float(np.max(y_values))
+        if x_min == x_max:
+            x_min -= 1.0
+            x_max += 1.0
+        if y_min == y_max:
+            y_min -= 1.0
+            y_max += 1.0
+
+        def project(x_val: float, y_val: float) -> tuple[int, int]:
+            x0, y0, x1, y1 = plot
+            px = x0 + int((x_val - x_min) / max(1e-8, x_max - x_min) * (x1 - x0))
+            py = y1 - int((y_val - y_min) / max(1e-8, y_max - y_min) * (y1 - y0))
+            return px, py
+
+        for x_val, y_val in zip(mean, diff):
+            px, py = project(float(x_val), float(y_val))
+            draw.ellipse((px - 4, py - 4, px + 4, py + 4), fill=(40, 115, 190))
+        for value, color in (
+            (bias, (20, 20, 20)),
+            (bias + 1.96 * sd, (190, 45, 45)),
+            (bias - 1.96 * sd, (190, 45, 45)),
+        ):
+            if np.isfinite(value):
+                _, py = project(x_min, float(value))
+                draw.line((plot[0], py, plot[2], py), fill=color, width=2)
+        draw.text((plot[0], plot[3] + 8), f"{x_min:.2f}", fill=(20, 20, 20))
+        draw.text((plot[2] - 50, plot[3] + 8), f"{x_max:.2f}", fill=(20, 20, 20))
+        draw.text((plot[0] - 70, plot[1]), f"{y_max:.2f}", fill=(20, 20, 20))
+        draw.text((plot[0] - 70, plot[3] - 12), f"{y_min:.2f}", fill=(20, 20, 20))
+        draw.text((plot[2] - 230, plot[1] + 12), f"bias={bias:.2f}, sd={sd:.2f}", fill=(20, 20, 20))
+    else:
+        draw.text((margin_left + 20, margin_top + 30), "No finite paired values available.", fill=(120, 30, 30))
+
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    image.save(output)

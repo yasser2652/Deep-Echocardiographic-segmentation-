@@ -22,7 +22,8 @@ python -m src.train --config config.yaml --create-dummy-data --epochs 1 --batch-
 - `src/dataset.py`: flexible CAMUS-style discovery, loading, metadata parsing, split construction, synthetic mixing, dummy dataset generation.
 - `src/transforms.py`: resizing, normalization, basic and ultrasound-specific augmentation.
 - `src/models/`: baseline U-Net, Attention U-Net, U-Net++, MultiResUNet, Temporal U-Net.
-- `src/model_registry.py`: model lookup by config/CLI name.
+- `src/models/registry.py` and `src/model_registry.py`: model lookup by config/CLI name. Keep `src.model_registry` backward compatible.
+- `src/models/gdkvm.py`, `src/models/echovim.py`, `src/models/osa.py`: research-inspired advanced echo segmentation models, not official reproductions unless explicitly updated.
 - `src/losses.py`, `src/metrics.py`, `src/surface_metrics.py`: training and evaluation criteria.
 - `src/clinical_metrics.py`: research-grade LVEDV/LVESV/LVEF estimates.
 - `src/train.py`, `src/evaluate.py`, `src/predict.py`, `src/compare_experiments.py`, `src/cross_validate.py`: CLI workflows.
@@ -31,6 +32,7 @@ python -m src.train --config config.yaml --create-dummy-data --epochs 1 --batch-
 ## Coding Conventions
 
 - Keep the baseline U-Net intact for fair comparisons.
+- When adding a model, register it in `src/models/registry.py`, preserve the `src.model_registry` wrapper, and add a shape test.
 - Do not hardcode local data paths. Use `config.yaml` or CLI overrides.
 - Preserve CPU compatibility for all tests and smoke runs.
 - Avoid loading full CAMUS data into memory; use `Dataset` and `DataLoader`.
@@ -38,4 +40,4 @@ python -m src.train --config config.yaml --create-dummy-data --epochs 1 --batch-
 - Temporal mode should use real sequence/video frames when available and repeat ED/ES frames only as a fallback.
 - Treat clinical metrics as research estimates. Do not present them as clinical measurements.
 - Keep masks integer label maps: `0` background, `1` LV cavity, `2` myocardium, `3` left atrium.
-- When adding a model, register it in `src/model_registry.py` and add a shape test.
+- Advanced model tests should run on CPU with small `base_channels`.

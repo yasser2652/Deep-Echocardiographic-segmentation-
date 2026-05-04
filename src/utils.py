@@ -9,6 +9,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -52,7 +53,8 @@ def copy_config(config_path: PathLike | None, output_dir: PathLike) -> None:
 
 def update_config_from_args(config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     updated = dict(config)
-    for key, value in vars(args).items():
+    arg_values = vars(args)
+    for key, value in arg_values.items():
         if key == "config" or value is None:
             continue
         if key == "image_size":
@@ -63,6 +65,13 @@ def update_config_from_args(config: dict[str, Any], args: argparse.Namespace) ->
             updated["use_synthetic"] = bool(value)
         else:
             updated[key] = value
+    if updated.get("learning_rate") is not None and arg_values.get("lr") is None:
+        updated["lr"] = float(updated["learning_rate"])
+    if updated.get("use_amp") is not None and arg_values.get("mixed_precision") is None:
+        updated["use_mixed_precision"] = bool(updated["use_amp"])
+    if updated.get("save_dir") is not None and arg_values.get("output_dir") is None:
+        if updated.get("output_dir") in (None, "outputs") or str(updated.get("save_dir")) != "outputs":
+            updated["output_dir"] = updated["save_dir"]
     return updated
 
 
@@ -125,9 +134,18 @@ def append_csv_row(path: PathLike, row: dict[str, Any]) -> None:
 def safe_torch_save(obj: Any, path: PathLike) -> None:
     path = Path(path)
     ensure_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
     torch.save(obj, tmp)
-    tmp.replace(path)
+    try:
+        tmp.replace(path)
+    except PermissionError:
+        # Some Windows/Drive/antivirus combinations briefly block atomic
+        # replace. Keep the safe temp write, then fall back to a regular copy.
+        shutil.copy2(tmp, path)
+        try:
+            tmp.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
 
 def save_checkpoint(
@@ -256,4 +274,3 @@ class AverageMeter:
     def update(self, value: float, n: int = 1) -> None:
         self.sum += float(value) * n
         self.count += n
-

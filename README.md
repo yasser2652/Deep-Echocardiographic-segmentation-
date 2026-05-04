@@ -1,13 +1,20 @@
 # CAMUS 2D Echocardiography Segmentation
 
-This repository implements a modern PyTorch research pipeline inspired by Leclerc et al., 2019, "Deep Learning for Segmentation using an Open Large-Scale Dataset in 2D Echocardiography." The original paper introduced and benchmarked segmentation methods on CAMUS for 2D echocardiography, targeting LV cavity, myocardium, left atrium, and background across 2CH/4CH ED/ES images.
+This repository implements a modular PyTorch research pipeline inspired by Leclerc et al., 2019, "Deep Learning for Segmentation using an Open Large-Scale Dataset in 2D Echocardiography." The main CAMUS task is segmentation of background, LV cavity, myocardium, and left atrium in 2CH/4CH ED/ES echocardiography frames.
 
-This codebase keeps a simple baseline U-Net for fair reproduction-style comparison, then adds stronger augmentation, postprocessing, Attention U-Net, U-Net++, MultiResUNet, and optional temporal early-fusion U-Net.
+The project keeps a simple baseline U-Net for fair comparison, then adds stronger augmentation, postprocessing, Attention U-Net, U-Net++, MultiResUNet, temporal early-fusion U-Net, and three advanced repo-compatible model families:
+
+- `gdkvm`: dynamic key-value-memory-inspired encoder-decoder segmentation.
+- `echovim`: Vision Mamba/state-space-inspired dense segmentation.
+- `osa`: orthogonal state-update and anatomical-prior-aware segmentation.
+
+The `gdkvm`, `echovim`, and `osa` implementations are practical PyTorch research-inspired approximations built to work in this repository. They are not claimed to be official reproductions unless an official implementation is explicitly integrated later.
 
 ## What Is Implemented
 
 - Flexible CAMUS-style dataset discovery with patient folders, 2CH/4CH views, ED/ES phases, masks, metadata, quality labels, and pixel spacing when available.
-- Single-frame and optional temporal-window inputs.
+- Generic image/mask segmentation layout support for datasets such as curated EchoNet-Dynamic frame exports.
+- Single-frame inputs and optional temporal/video inputs where models support them.
 - Real, synthetic-only, real-only, and mixed real/synthetic training modes.
 - Basic and ultrasound-specific augmentations: rotation, scale, crop, flip, brightness/contrast, Gaussian noise, speckle, gain, acoustic shadow dropout, elastic deformation, blur, and gamma.
 - Losses: Dice, cross-entropy, Dice + CE, focal, Tversky, boundary, and temporal smoothness helper.
@@ -26,13 +33,13 @@ pip install -r requirements.txt
 
 ## Google Colab
 
-For GPU training in Colab, use [COLAB.md](COLAB.md) and [notebooks/colab_train_test.ipynb](notebooks/colab_train_test.ipynb). The notebook mounts Google Drive, clones this repository, installs Colab-safe dependencies, runs tests, trains, evaluates, and saves checkpoints to Drive.
+For GPU training in Colab, use [COLAB.md](COLAB.md) and [notebooks/colab_train_test.ipynb](notebooks/colab_train_test.ipynb). The notebook mounts Google Drive, clones this repository, installs Colab-safe dependencies, optionally copies CAMUS from Drive to local Colab disk, runs tests, trains, evaluates, and saves checkpoints to Drive.
 
-## Prepare CAMUS
+## Dataset Formats
+
+### CAMUS Layout
 
 Download CAMUS manually from the official challenge/dataset source, accept its license, and point `data_root` in `config.yaml` or pass `--data-root`.
-
-Supported examples:
 
 ```text
 CAMUS/
@@ -47,66 +54,144 @@ CAMUS/
     Info_4CH.cfg
 ```
 
-PNG/TIFF/NumPy/NIfTI-style layouts are also supported when filenames include patient, view (`2CH` or `4CH`), phase (`ED` or `ES`), and masks use tokens like `_gt`, `_mask`, `_seg`, or `_label`.
+PNG/TIFF/NumPy/NIfTI layouts are also supported when filenames include patient, view (`2CH` or `4CH`), phase (`ED` or `ES`), and masks use tokens like `_gt`, `_mask`, `_seg`, or `_label`.
+
+### Generic Image/Mask Layout
+
+Use `dataset_name: generic` for a simple segmentation dataset:
+
+```text
+data/
+  train/
+    images/
+      sample001.png
+    masks/
+      sample001_mask.png
+  val/
+    images/
+    masks/
+  test/
+    images/
+    masks/
+```
+
+Supported file types include `.png`, `.jpg`, `.jpeg`, `.tif`, `.tiff`, `.npy`, `.npz`, `.nii`, and `.nii.gz` when medical loading dependencies are installed.
+
+## Available Models
+
+The model registry accepts:
+
+```text
+baseline_unet, unet, attention_unet, unetpp, unet++, multiresunet,
+temporal_unet, gdkvm, echovim, echo_vim, osa
+```
+
+The baseline U-Net is intentionally preserved so experiments can compare:
+
+- baseline U-Net
+- baseline U-Net plus stronger augmentation
+- baseline U-Net plus postprocessing
+- Attention U-Net
+- U-Net++
+- MultiResUNet
+- Temporal U-Net
+- GDKVM-inspired model
+- EchoVim-inspired model
+- OSA-inspired model
 
 ## Train
 
 Baseline U-Net:
 
 ```powershell
-python -m src.train --config config.yaml --data-root C:\path\to\CAMUS --model baseline_unet
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model unet
 ```
 
-Attention U-Net:
+GDKVM:
 
 ```powershell
-python -m src.train --config config.yaml --data-root C:\path\to\CAMUS --model attention_unet
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model gdkvm
 ```
 
-MultiResUNet:
+EchoVim:
 
 ```powershell
-python -m src.train --config config.yaml --data-root C:\path\to\CAMUS --model multiresunet
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model echovim
+```
+
+OSA:
+
+```powershell
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model osa
+```
+
+Attention U-Net and MultiResUNet:
+
+```powershell
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model attention_unet
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model multiresunet
 ```
 
 Temporal early fusion:
 
 ```powershell
-python -m src.train --config config.yaml --data-root C:\path\to\CAMUS --model temporal_unet --temporal-window 3
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model temporal_unet --temporal-window 3
 ```
 
-If neighboring frames are unavailable, temporal mode repeats the current frame so the code remains runnable; meaningful temporal gains require actual adjacent frames or sequence exports.
-When CAMUS-style sequence files are present with names containing `sequence`, `seq`, `video`, `cine`, or `movie`, the dataset loader uses them to stack neighboring frames around the matching ED/ES still frame.
+If neighboring frames are unavailable, temporal mode repeats the current frame so the code remains runnable. Meaningful temporal gains require actual adjacent frames or sequence exports. CAMUS-style sequence files with names containing `sequence`, `seq`, `video`, `cine`, or `movie` are used when available.
 
 Smoke test without CAMUS:
 
 ```powershell
-python -m src.train --config config.yaml --create-dummy-data --epochs 1 --batch-size 2 --image-size 64 --model baseline_unet
+python train.py --config config.yaml --create-dummy-data --epochs 1 --batch-size 2 --num-workers 0 --image-size 64 --model baseline_unet
 ```
+
+Training writes `latest.pth`, `best.pth`, `last.pt`, `best_dice.pt`, `training_log.csv`, `training_summary.json`, a resolved config, and validation overlays.
 
 ## Evaluate
 
 ```powershell
-python -m src.evaluate --checkpoint outputs\run-name\best.pth --data-root C:\path\to\CAMUS --split test
+python evaluate.py --model gdkvm --checkpoint outputs\run-name\best_dice.pt --data-dir C:\path\to\CAMUS --split test
 ```
 
 Outputs include `metrics.csv`, `metrics.json`, `per_patient_metrics.csv`, qualitative overlays, failure cases, and Bland-Altman plots when clinical estimates are available.
 
-## Predict
+## Predict A Folder
 
 ```powershell
-python -m src.predict --checkpoint outputs\run-name\best.pth --input C:\path\to\patient0001 --output-dir outputs\predictions --save-confidence --postprocess
+python -m src.predict --checkpoint outputs\run-name\best_dice.pt --input C:\path\to\patient0001 --output-dir outputs\predictions --save-confidence --postprocess
 ```
 
 Prediction saves raw masks, color masks, overlays, optional softmax arrays, and `quality_flags.json`.
 
-## Compare Experiments
+## Single-Image Inference
+
+```powershell
+python inference.py ^
+  --model osa ^
+  --checkpoint outputs\osa_run\best_dice.pt ^
+  --image C:\path\to\image.png ^
+  --output outputs\prediction.png ^
+  --overlay outputs\prediction_overlay.png
+```
+
+## Compare Trained Models
+
+```powershell
+python compare_models.py ^
+  --models unet gdkvm echovim osa ^
+  --checkpoints outputs ^
+  --data-dir C:\path\to\CAMUS ^
+  --output outputs\model_comparison.csv
+```
+
+This writes a table with model name, Dice, IoU, trainable parameter count, FPS, and checkpoint path.
+
+Existing experiment-folder comparison is still available:
 
 ```powershell
 python -m src.compare_experiments outputs\baseline outputs\attention outputs\multires --output-dir outputs\comparison
 ```
-
-This writes `comparison_report.csv`, summary JSON, training-curve plots, and a Dice-per-structure plot when class Dice metrics are available.
 
 ## Cross-Validation
 
@@ -122,8 +207,6 @@ After training/evaluating folds, aggregate fold metrics:
 python -m src.cross_validate --output-dir outputs\cv
 ```
 
-The aggregator looks for `metrics.json` under fold folders and writes `fold_metrics.csv`, `cross_validation_summary.csv`, and `cross_validation_summary.json`.
-
 ## Test
 
 ```powershell
@@ -131,11 +214,26 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 pytest -q tests
 ```
 
+Quick syntax check:
+
+```powershell
+python -B -c "import ast, pathlib; files=list(pathlib.Path('src').rglob('*.py'))+list(pathlib.Path('tests').rglob('*.py')); [ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in files]"
+```
+
+## References
+
+- Leclerc et al., 2019, "Deep Learning for Segmentation using an Open Large-Scale Dataset in 2D Echocardiography."
+- CAMUS dataset/challenge documentation from the official CAMUS source.
+- GDKVM public project page: https://github.com/wangrui2025/GDKVM
+- EchoVim and OSA architecture references should be filled with the exact paper/code links used in a future official integration.
+
 ## Limitations
 
 - This is research code, not a medical device.
+- GDKVM, EchoVim, and OSA are repo-compatible approximations, not official reproductions.
 - Results depend on exact CAMUS splits, preprocessing, and label conventions.
 - Clinical volume estimates require correct view pairing, ED/ES masks, and spacing metadata.
 - Simpson-style biplane estimates here are practical approximations, not validated clinical measurements.
 - Temporal mode needs real neighboring frames to provide temporal information.
+- EchoNet-Dynamic segmentation support assumes you export frames and masks into the generic image/mask layout.
 - Synthetic augmentation and synthetic data mixing must be validated carefully before claims are made.

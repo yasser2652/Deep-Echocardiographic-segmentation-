@@ -1,17 +1,22 @@
 data_root: null
 output_dir: outputs
+save_dir: outputs
+dataset_name: camus
 image_size: 256
+input_size: [256, 256]
 num_classes: 4
 in_channels: 1
 batch_size: 8
 epochs: 100
 lr: 0.0003
+learning_rate: 0.0003
 weight_decay: 0.0001
 model: baseline_unet
 loss: dice_ce
 optimizer: adamw
 scheduler: cosine
 use_mixed_precision: true
+use_amp: true
 use_postprocessing: true
 use_synthetic: false
 synthetic_data_root: null

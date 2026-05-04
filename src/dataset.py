@@ -33,6 +33,16 @@ class CamusSample:
     metadata: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class ImageMaskSample:
+    image_path: Path
+    mask_path: Path | None
+    patient_id: str
+    view: str = "unknown"
+    phase: str = "unknown"
+    spacing: tuple[float, float] | None = None
+
+
 def _lower_name(path: Path) -> str:
     return path.name.lower()
 
@@ -239,6 +249,73 @@ def find_matching_mask(image_path: Path, masks: list[Path]) -> Path | None:
     return candidates[0]
 
 
+def _pair_key(path: Path) -> str:
+    key = strip_medical_suffix(path).lower()
+    for token in MASK_TOKENS:
+        key = key.replace(token, "")
+    return key.strip("_- .")
+
+
+def discover_image_mask_samples(
+    root: str | Path,
+    split: str | None = None,
+    require_masks: bool = True,
+) -> list[ImageMaskSample]:
+    """Discover generic image/mask pairs.
+
+    Supported layouts include:
+    data/train/images/*.png and data/train/masks/*.png, or a single folder with
+    image files and masks named with *_mask, *_gt, *_seg, or *_label suffixes.
+    """
+
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(f"Data root not found: {root}")
+    split_root = root / split if split and (root / split).exists() else root
+    images_dir = split_root / "images"
+    masks_dir = split_root / "masks"
+    if images_dir.exists():
+        image_files = [p for p in images_dir.rglob("*") if p.is_file() and is_supported_image(p) and not is_mask_path(p)]
+        mask_files = [p for p in masks_dir.rglob("*") if p.is_file() and is_supported_image(p)] if masks_dir.exists() else []
+    else:
+        files = [p for p in split_root.rglob("*") if p.is_file() and is_supported_image(p)]
+        mask_files = [p for p in files if is_mask_path(p)]
+        image_files = [p for p in files if not is_mask_path(p)]
+
+    mask_by_key = {_pair_key(mask): mask for mask in sorted(mask_files)}
+    samples: list[ImageMaskSample] = []
+    missing: list[Path] = []
+    for image_path in sorted(image_files):
+        mask_path = mask_by_key.get(_pair_key(image_path))
+        if mask_path is None:
+            mask_path = find_matching_mask(image_path, mask_files)
+        if require_masks and mask_path is None:
+            missing.append(image_path)
+            continue
+        samples.append(
+            ImageMaskSample(
+                image_path=image_path,
+                mask_path=mask_path,
+                patient_id=infer_patient_id(image_path),
+                view=infer_view(image_path) or "unknown",
+                phase=infer_phase(image_path) or "unknown",
+                spacing=(1.0, 1.0),
+            )
+        )
+
+    if require_masks and not samples and missing:
+        examples = "\n".join(str(p) for p in missing[:5])
+        raise FileNotFoundError(
+            "Found images but no matching masks. Expected masks in a sibling `masks/` folder or names like "
+            "`*_mask.*`, `*_gt.*`, `*_seg.*`, or `*_label.*`.\n"
+            f"First unmatched images:\n{examples}"
+        )
+    if not samples:
+        target = split_root if split is None else f"{root}/{split}"
+        raise FileNotFoundError(f"No generic image/mask samples found under {target}.")
+    return samples
+
+
 def is_sequence_path(path: Path) -> bool:
     name = strip_medical_suffix(path).lower()
     if is_mask_path(path):
@@ -430,6 +507,61 @@ class CamusDataset(Dataset):
         return image_tensor, mask_tensor, metadata
 
 
+class ImageMaskDataset(Dataset):
+    def __init__(
+        self,
+        root: str | Path,
+        split: str | None = None,
+        samples: list[ImageMaskSample] | None = None,
+        transform: SegmentationTransform | None = None,
+        image_size: int | tuple[int, int] = 256,
+        training: bool = False,
+        require_masks: bool = True,
+        class_mapping: dict[int, int] | None = None,
+    ) -> None:
+        self.root = Path(root)
+        self.split = split
+        self.samples = samples if samples is not None else discover_image_mask_samples(root, split=split, require_masks=require_masks)
+        self.transform = transform or SegmentationTransform(image_size=image_size, training=training)
+        self.require_masks = require_masks
+        self.class_mapping = class_mapping
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def _remap_mask(self, mask: np.ndarray) -> np.ndarray:
+        mask = mask.astype(np.int64, copy=False)
+        if not self.class_mapping:
+            return mask
+        out = np.zeros_like(mask, dtype=np.int64)
+        for source, target in self.class_mapping.items():
+            out[mask == int(source)] = int(target)
+        return out
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+        sample = self.samples[index]
+        image = select_2d(load_medical_image(sample.image_path))
+        if sample.mask_path is None:
+            if self.require_masks:
+                raise FileNotFoundError(f"Missing segmentation mask for image: {sample.image_path}")
+            mask = np.zeros(image.shape[-2:], dtype=np.int64)
+        else:
+            mask = self._remap_mask(select_2d(load_medical_image(sample.mask_path)))
+        image_tensor, mask_tensor = self.transform(image, mask)
+        assert mask_tensor is not None
+        metadata = {
+            "patient_id": sample.patient_id,
+            "view": sample.view,
+            "phase": sample.phase,
+            "spacing": sample.spacing if sample.spacing is not None else (1.0, 1.0),
+            "image_path": str(sample.image_path),
+            "mask_path": str(sample.mask_path) if sample.mask_path is not None else None,
+            "sequence_path": None,
+            "quality": None,
+        }
+        return image_tensor, mask_tensor, metadata
+
+
 class SyntheticMixDataset(Dataset):
     def __init__(
         self,
@@ -491,10 +623,86 @@ def make_split_samples(samples: list[CamusSample], config: dict[str, Any]) -> di
     }
 
 
+def make_split_image_samples(samples: list[ImageMaskSample], config: dict[str, Any]) -> dict[str, list[ImageMaskSample]]:
+    patient_ids = sorted({s.patient_id for s in samples})
+    if config.get("split_file"):
+        split_ids = read_split_file(config["split_file"])
+    else:
+        split_ids = split_patients(
+            patient_ids,
+            seed=int(config.get("seed", 42)),
+            train_fraction=float(config.get("train_fraction", 0.8)),
+            val_fraction=float(config.get("val_fraction", 0.1)),
+        )
+    return {split: [sample for sample in samples if sample.patient_id in ids] for split, ids in split_ids.items()}
+
+
+def has_generic_split_layout(root: str | Path) -> bool:
+    root = Path(root)
+    if (root / "images").exists() and (root / "masks").exists():
+        return True
+    return any((root / split / "images").exists() and (root / split / "masks").exists() for split in ("train", "val", "test"))
+
+
+def build_generic_datasets(config: dict[str, Any], require_masks: bool = True) -> dict[str, Dataset]:
+    data_root = Path(config["data_root"])
+    prep = config.get("preprocessing", {}) or {}
+    aug = config.get("augmentation", {}) or {}
+    image_size = int(config.get("image_size", 256))
+    class_mapping = prep.get("class_mapping")
+    datasets: dict[str, Dataset] = {}
+    split_dirs = [split for split in ("train", "val", "test") if (data_root / split / "images").exists()]
+    if split_dirs:
+        for split_name in split_dirs:
+            transform = SegmentationTransform(
+                image_size=image_size,
+                training=split_name == "train",
+                augmentation=aug,
+                normalize=prep.get("normalize", "minmax"),
+                z_score=bool(prep.get("z_score", False)),
+            )
+            datasets[split_name] = ImageMaskDataset(
+                data_root,
+                split=split_name,
+                transform=transform,
+                training=split_name == "train",
+                require_masks=require_masks,
+                class_mapping=class_mapping,
+            )
+        if "val" not in datasets and "test" in datasets:
+            datasets["val"] = datasets["test"]
+        if "test" not in datasets and "val" in datasets:
+            datasets["test"] = datasets["val"]
+        return datasets
+
+    all_samples = discover_image_mask_samples(data_root, require_masks=require_masks)
+    splits = make_split_image_samples(all_samples, config)
+    for split_name, split_samples in splits.items():
+        transform = SegmentationTransform(
+            image_size=image_size,
+            training=split_name == "train",
+            augmentation=aug,
+            normalize=prep.get("normalize", "minmax"),
+            z_score=bool(prep.get("z_score", False)),
+        )
+        datasets[split_name] = ImageMaskDataset(
+            data_root,
+            samples=split_samples,
+            transform=transform,
+            training=split_name == "train",
+            require_masks=require_masks,
+            class_mapping=class_mapping,
+        )
+    return datasets
+
+
 def build_datasets(config: dict[str, Any], require_masks: bool = True) -> dict[str, Dataset]:
     data_root = config.get("data_root")
     if not data_root:
         raise ValueError("data_root is not set. Point it to a CAMUS root or use the dummy test generator.")
+    dataset_name = str(config.get("dataset_name", "camus")).lower()
+    if dataset_name in {"generic", "image_mask", "echonet_dynamic"} or has_generic_split_layout(data_root):
+        return build_generic_datasets(config, require_masks=require_masks)
     all_samples = discover_camus_samples(data_root, require_masks=require_masks)
     splits = make_split_samples(all_samples, config)
     prep = config.get("preprocessing", {}) or {}
