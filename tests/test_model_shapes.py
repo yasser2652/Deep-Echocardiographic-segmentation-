@@ -15,6 +15,8 @@ from src.model_registry import get_model
         ("gdkvm", 1),
         ("echovim", 1),
         ("osa", 1),
+        ("resnet18_unet", 1),
+        ("resnet34_unet", 1),
     ],
 )
 def test_model_output_shapes(name, in_channels):
@@ -52,3 +54,13 @@ def test_advanced_models_training_step(name):
     loss = torch.nn.functional.cross_entropy(model(x), target)
     loss.backward()
     assert torch.isfinite(loss)
+
+
+@pytest.mark.parametrize("name", ["resnet18_unet", "resnet34_unet", "resnet50_unet"])
+def test_resnet_unet_dummy_shape_128(name):
+    model = get_model(name, in_channels=1, num_classes=4, base_channels=4, dropout=0.0, pretrained=False)
+    model.eval()
+    x = torch.randn(2, 1, 128, 128)
+    with torch.no_grad():
+        y = model(x)
+    assert y.shape == (2, 4, 128, 128)

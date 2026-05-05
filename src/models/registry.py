@@ -9,6 +9,7 @@ from src.models.echovim import EchoVimSegmentationModel
 from src.models.gdkvm import GDKVMSegmentationModel
 from src.models.multiresunet import MultiResUNet
 from src.models.osa import OSASegmentationModel
+from src.models.resnet_unet import ResNet18UNet, ResNet34UNet, ResNet50UNet
 from src.models.temporal_unet import TemporalUNet
 from src.models.unet import UNet
 from src.models.unetpp import UNetPlusPlus
@@ -26,9 +27,13 @@ MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "echovim": EchoVimSegmentationModel,
     "echo_vim": EchoVimSegmentationModel,
     "osa": OSASegmentationModel,
+    "resnet18_unet": ResNet18UNet,
+    "resnet34_unet": ResNet34UNet,
+    "resnet50_unet": ResNet50UNet,
 }
 
 ADVANCED_MODEL_KEYS = {"gdkvm", "echovim", "echo_vim", "osa"}
+RESNET_UNET_KEYS = {"resnet18_unet", "resnet34_unet", "resnet50_unet"}
 
 
 def available_models() -> list[str]:
@@ -61,7 +66,9 @@ def get_model(
             temporal_window=temporal_window,
             temporal_attention=bool(kwargs.get("temporal_attention", False)),
         )
-    if key in ADVANCED_MODEL_KEYS:
+    if key in ADVANCED_MODEL_KEYS | RESNET_UNET_KEYS:
+        extra_kwargs = dict(kwargs)
+        pretrained = bool(extra_kwargs.pop("pretrained", extra_kwargs.pop("imagenet_pretrained", False)))
         return model_cls(
             in_channels=in_channels,
             num_classes=num_classes,
@@ -69,7 +76,8 @@ def get_model(
             batch_norm=batch_norm,
             dropout=dropout,
             input_size=input_size,
-            **kwargs,
+            pretrained=pretrained,
+            **extra_kwargs,
         )
     return model_cls(
         in_channels=in_channels,
@@ -102,6 +110,7 @@ def build_model_from_config(config: dict[str, Any]) -> nn.Module:
         base_channels=int(params.get("base_channels", 32)),
         batch_norm=bool(params.get("batch_norm", True)),
         dropout=float(params.get("dropout", 0.0)),
+        pretrained=bool(params.get("pretrained", params.get("imagenet_pretrained", False))),
         temporal_window=temporal_window,
         temporal_attention=bool(config.get("temporal_attention", False)),
     )

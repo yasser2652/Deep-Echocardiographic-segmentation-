@@ -83,7 +83,8 @@ The model registry accepts:
 
 ```text
 baseline_unet, unet, attention_unet, unetpp, unet++, multiresunet,
-temporal_unet, gdkvm, echovim, echo_vim, osa
+temporal_unet, gdkvm, echovim, echo_vim, osa,
+resnet18_unet, resnet34_unet, resnet50_unet
 ```
 
 The baseline U-Net is intentionally preserved so experiments can compare:
@@ -98,6 +99,7 @@ The baseline U-Net is intentionally preserved so experiments can compare:
 - GDKVM-inspired model
 - EchoVim-inspired model
 - OSA-inspired model
+- ResNet encoder U-Net with resnet18, resnet34, or resnet50 encoder
 
 ## Train
 
