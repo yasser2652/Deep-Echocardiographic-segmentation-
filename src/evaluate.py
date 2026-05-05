@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.clinical_metrics import clinical_metric_errors, estimate_patient_volumes, save_bland_altman_plot
+from src.clinical_metrics import clinical_metric_errors, estimate_patient_volumes, save_bland_altman_plot, save_patient_clinical_summary
 from src.dataset import build_datasets
 from src.metrics import batch_segmentation_metrics
 from src.model_registry import build_model_from_config
@@ -28,14 +28,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", "--data-dir", "--data_dir", dest="data_root", default=None)
     parser.add_argument("--output-dir", dest="output_dir", default=None)
     parser.add_argument("--model", default=None)
+    parser.add_argument("--postprocess", dest="use_postprocessing", action="store_true", default=None)
+    parser.add_argument("--no-postprocess", dest="use_postprocessing", action="store_false")
+    parser.add_argument("--camus-clinical-metrics", dest="camus_clinical_metrics", action="store_true", default=None)
+    parser.add_argument("--split-file", dest="split_file", default=None)
+    parser.add_argument("--save-json", dest="save_json_outputs", action="store_true", default=None)
+    parser.add_argument("--save-csv", dest="save_csv_outputs", action="store_true", default=None)
     parser.add_argument("--split", choices=["train", "val", "test"], default="test")
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", dest="batch_size", type=int, default=None)
+    parser.add_argument("--num-workers", dest="num_workers", type=int, default=None)
     parser.add_argument("--num-classes", dest="num_classes", type=int, default=None)
     return parser.parse_args()
 
 
-def _spacing_from_metadata(metadata: dict[str, Any], idx: int = 0) -> tuple[float, float]:
+def _metadata_bool(metadata: dict[str, Any], key: str, idx: int, default: bool = True) -> bool:
+    value = metadata.get(key, default)
+    if torch.is_tensor(value):
+        return bool(value[idx].item())
+    if isinstance(value, list):
+        item = value[idx] if len(value) > idx else default
+        if torch.is_tensor(item):
+            return bool(item.item())
+        return bool(item)
+    return bool(value)
+
+
+def _spacing_from_metadata(metadata: dict[str, Any], idx: int = 0) -> tuple[float, float] | None:
+    if not _metadata_bool(metadata, "spacing_available", idx, default=True):
+        return None
     spacing = metadata.get("spacing", (1.0, 1.0))
     if isinstance(spacing, list):
         if len(spacing) == 2 and torch.is_tensor(spacing[0]):
@@ -71,7 +92,8 @@ def main() -> None:
     rows = []
     pred_by_patient: dict[str, dict[tuple[str, str], np.ndarray]] = defaultdict(dict)
     ref_by_patient: dict[str, dict[tuple[str, str], np.ndarray]] = defaultdict(dict)
-    spacing_by_patient: dict[str, dict[tuple[str, str], tuple[float, float]]] = defaultdict(dict)
+    spacing_by_patient: dict[str, dict[tuple[str, str], tuple[float, float] | None]] = defaultdict(dict)
+    image_paths_by_patient: dict[str, dict[tuple[str, str], str]] = defaultdict(dict)
     for batch_idx, (images, masks, metadata) in enumerate(tqdm(loader, desc="evaluate")):
         images = images.to(device)
         logits = model(images)
@@ -100,46 +122,75 @@ def main() -> None:
             pred_by_patient[patient][(view, phase)] = pred
             ref_by_patient[patient][(view, phase)] = target
             spacing_by_patient[patient][(view, phase)] = spacing
+            image_paths_by_patient[patient][(view, phase)] = metadata["image_path"][i]
             if batch_idx < 8:
                 save_overlay(images[i].detach().cpu().numpy(), pred, output_dir / "overlays" / f"{patient}_{view}_{phase}.png")
             if seg["mean_dice"] < 0.5:
                 save_overlay(images[i].detach().cpu().numpy(), pred, output_dir / "failure_cases" / f"{patient}_{view}_{phase}.png")
 
     metrics_df = pd.DataFrame(rows)
-    metrics_df.to_csv(output_dir / "metrics.csv", index=False)
+    save_csv_outputs = bool(config.get("save_csv_outputs", True))
+    save_json_outputs = bool(config.get("save_json_outputs", True))
+    if save_csv_outputs:
+        metrics_df.to_csv(output_dir / "metrics.csv", index=False)
     summary = metrics_df.select_dtypes(include=[np.number]).mean(numeric_only=True).to_dict()
     summary["num_samples"] = len(metrics_df)
+    view_phase_summary = pd.DataFrame()
+    if not metrics_df.empty and {"view", "phase"}.issubset(metrics_df.columns):
+        view_phase_summary = metrics_df.groupby(["view", "phase"], dropna=False).mean(numeric_only=True).reset_index()
+        if save_csv_outputs:
+            view_phase_summary.to_csv(output_dir / "metrics_by_view_phase.csv", index=False)
+        for row in view_phase_summary.to_dict("records"):
+            prefix = f"{row['view']}_{row['phase']}"
+            for key, value in row.items():
+                if key not in {"view", "phase"} and isinstance(value, (int, float, np.floating)) and np.isfinite(value):
+                    summary[f"{prefix}_{key}"] = float(value)
 
     pred_clinical = []
     ref_clinical = []
     clinical_cfg = config.get("clinical", {}) or {}
-    for patient in sorted(pred_by_patient):
-        pred_vols = estimate_patient_volumes(
-            pred_by_patient[patient],
-            spacing_by_patient.get(patient),
-            lv_class=int(clinical_cfg.get("lv_class", 1)),
-            coefficient=float(clinical_cfg.get("area_volume_coefficient", 0.85)),
-        )
-        ref_vols = estimate_patient_volumes(
-            ref_by_patient[patient],
-            spacing_by_patient.get(patient),
-            lv_class=int(clinical_cfg.get("lv_class", 1)),
-            coefficient=float(clinical_cfg.get("area_volume_coefficient", 0.85)),
-        )
-        pred_clinical.append({"patient_id": patient, **pred_vols})
-        ref_clinical.append({"patient_id": patient, **{f"ref_{k}": v for k, v in ref_vols.items()}})
-    pred_df = pd.DataFrame(pred_clinical)
-    ref_df = pd.DataFrame(ref_clinical)
-    per_patient = pred_df.merge(ref_df, on="patient_id", how="outer") if not pred_df.empty else pd.DataFrame()
-    per_patient.to_csv(output_dir / "per_patient_metrics.csv", index=False)
-    ref_rows = [
-        {"patient_id": row["patient_id"], "LVEDV": row.get("ref_LVEDV"), "LVESV": row.get("ref_LVESV"), "LVEF": row.get("ref_LVEF")}
-        for row in ref_df.to_dict("records")
-    ]
-    summary.update(clinical_metric_errors(pred_clinical, ref_rows))
-    save_json(summary, output_dir / "metrics.json")
-    if not per_patient.empty and {"LVEF", "ref_LVEF"}.issubset(per_patient.columns):
-        save_bland_altman_plot(per_patient["LVEF"].to_numpy(), per_patient["ref_LVEF"].to_numpy(), output_dir / "bland_altman_lvef.png", "LVEF Bland-Altman")
+    if bool(config.get("camus_clinical_metrics", True)):
+        plausible = clinical_cfg.get("plausible_lvef_range", (0.0, 90.0))
+        for patient in sorted(pred_by_patient):
+            pred_vols = estimate_patient_volumes(
+                pred_by_patient[patient],
+                spacing_by_patient.get(patient),
+                image_paths_by_patient.get(patient),
+                lv_class=int(clinical_cfg.get("lv_class", 1)),
+                coefficient=float(clinical_cfg.get("area_volume_coefficient", 0.85)),
+                method=str(clinical_cfg.get("method", "simpson")),
+                num_disks=int(clinical_cfg.get("simpson_disks", 20)),
+                plausible_lvef_range=(float(plausible[0]), float(plausible[1])),
+            )
+            ref_vols = estimate_patient_volumes(
+                ref_by_patient[patient],
+                spacing_by_patient.get(patient),
+                image_paths_by_patient.get(patient),
+                lv_class=int(clinical_cfg.get("lv_class", 1)),
+                coefficient=float(clinical_cfg.get("area_volume_coefficient", 0.85)),
+                method=str(clinical_cfg.get("method", "simpson")),
+                num_disks=int(clinical_cfg.get("simpson_disks", 20)),
+                plausible_lvef_range=(float(plausible[0]), float(plausible[1])),
+            )
+            pred_clinical.append({"patient_id": patient, **pred_vols})
+            ref_clinical.append({"patient_id": patient, **{f"ref_{k}": v for k, v in ref_vols.items()}})
+        pred_df = pd.DataFrame(pred_clinical)
+        ref_df = pd.DataFrame(ref_clinical)
+        per_patient = pred_df.merge(ref_df, on="patient_id", how="outer") if not pred_df.empty else pd.DataFrame()
+        if save_csv_outputs:
+            per_patient.to_csv(output_dir / "per_patient_metrics.csv", index=False)
+        save_patient_clinical_summary(per_patient.to_dict("records"), output_dir)
+        ref_rows = [
+            {"patient_id": row["patient_id"], "LVEDV": row.get("ref_LVEDV"), "LVESV": row.get("ref_LVESV"), "LVEF": row.get("ref_LVEF")}
+            for row in ref_df.to_dict("records")
+        ]
+        summary.update(clinical_metric_errors(pred_clinical, ref_rows))
+        if not per_patient.empty and {"LVEF", "ref_LVEF"}.issubset(per_patient.columns):
+            save_bland_altman_plot(per_patient["LVEF"].to_numpy(), per_patient["ref_LVEF"].to_numpy(), output_dir / "bland_altman_lvef.png", "LVEF Bland-Altman")
+    if save_json_outputs:
+        save_json(summary, output_dir / "metrics.json")
+        if not view_phase_summary.empty:
+            save_json({"rows": view_phase_summary.to_dict("records")}, output_dir / "metrics_by_view_phase.json")
     print(f"Evaluation complete. Metrics saved to {output_dir}")
 
 

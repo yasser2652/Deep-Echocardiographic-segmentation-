@@ -16,9 +16,9 @@ The `gdkvm`, `echovim`, and `osa` implementations are practical PyTorch research
 - Generic image/mask segmentation layout support for datasets such as curated EchoNet-Dynamic frame exports.
 - Single-frame inputs and optional temporal/video inputs where models support them.
 - Real, synthetic-only, real-only, and mixed real/synthetic training modes.
-- Basic and ultrasound-specific augmentations: rotation, scale, crop, flip, brightness/contrast, Gaussian noise, speckle, gain, acoustic shadow dropout, elastic deformation, blur, and gamma.
-- Losses: Dice, cross-entropy, Dice + CE, focal, Tversky, boundary, and temporal smoothness helper.
-- Metrics: Dice, IoU, Hausdorff, HD95, average surface distance, approximate LVEDV/LVESV/LVEF, Bland-Altman plot.
+- Basic and ultrasound-specific augmentations: mild rotation, scale, translation, brightness/contrast, Gaussian noise, speckle, gain, acoustic shadow dropout, mild elastic deformation, blur, and gamma.
+- Losses: Dice, cross-entropy, Dice + CE, focal, Tversky, boundary, temporal smoothness helper, and `combined_clinical`.
+- Metrics: Dice, IoU, Hausdorff, HD95, average surface distance, CAMUS-style biplane Simpson LVEDV/LVESV/LVEF estimates, and Bland-Altman plot.
 - Prediction QC checks for empty masks, disconnected LV cavity, abnormal areas, low confidence, and anatomy warnings.
 - K-fold patient-level cross-validation support.
 - Dummy CAMUS-like dataset generator for tests and smoke runs.
@@ -148,13 +148,21 @@ python train.py --config config.yaml --create-dummy-data --epochs 1 --batch-size
 
 Training writes `latest.pth`, `best.pth`, `last.pt`, `best_dice.pt`, `training_log.csv`, `training_summary.json`, a resolved config, and validation overlays.
 
+Combined clinical segmentation loss:
+
+```powershell
+python train.py --config config.yaml --data-root C:\path\to\CAMUS --model unet --loss combined_clinical --class-weights 0.2,1.0,1.0,1.0
+```
+
+Patient split files are supported with `--split-file splits`, where `splits/` contains `train_patients.txt`, `val_patients.txt`, and `test_patients.txt`.
+
 ## Evaluate
 
 ```powershell
-python evaluate.py --model gdkvm --checkpoint outputs\run-name\best_dice.pt --data-dir C:\path\to\CAMUS --split test
+python evaluate.py --model gdkvm --checkpoint outputs\run-name\best_dice.pt --data-dir C:\path\to\CAMUS --split test --postprocess --camus-clinical-metrics --save-json --save-csv
 ```
 
-Outputs include `metrics.csv`, `metrics.json`, `per_patient_metrics.csv`, qualitative overlays, failure cases, and Bland-Altman plots when clinical estimates are available.
+Outputs include `metrics.csv`, `metrics.json`, `metrics_by_view_phase.csv/json`, `per_patient_metrics.csv`, `patient_clinical_metrics.csv/json`, qualitative overlays, failure cases, and Bland-Altman plots when clinical estimates are available.
 
 ## Predict A Folder
 

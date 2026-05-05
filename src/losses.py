@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import torch
@@ -14,11 +14,19 @@ def one_hot(target: torch.Tensor, num_classes: int) -> torch.Tensor:
 
 
 class DiceLoss(nn.Module):
-    def __init__(self, num_classes: int = 4, smooth: float = 1e-5, include_background: bool = True) -> None:
+    def __init__(
+        self,
+        num_classes: int = 4,
+        smooth: float = 1e-5,
+        include_background: bool = True,
+        class_weights: Sequence[float] | torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.smooth = smooth
         self.include_background = include_background
+        weights = None if class_weights is None else torch.as_tensor(class_weights, dtype=torch.float32)
+        self.register_buffer("class_weights", weights, persistent=False)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
@@ -30,14 +38,27 @@ class DiceLoss(nn.Module):
         intersection = torch.sum(probs * target_oh, dims)
         denominator = torch.sum(probs + target_oh, dims)
         dice = (2 * intersection + self.smooth) / (denominator + self.smooth)
+        if self.class_weights is not None:
+            weights = self.class_weights.to(logits.device)
+            weights = weights[: self.num_classes]
+            if not self.include_background:
+                weights = weights[1:]
+            dice = dice * weights / weights.clamp_min(1e-8).mean()
         return 1.0 - dice.mean()
 
 
 class DiceCrossEntropyLoss(nn.Module):
-    def __init__(self, num_classes: int = 4, dice_weight: float = 1.0, ce_weight: float = 1.0) -> None:
+    def __init__(
+        self,
+        num_classes: int = 4,
+        dice_weight: float = 1.0,
+        ce_weight: float = 1.0,
+        class_weights: Sequence[float] | torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
-        self.dice = DiceLoss(num_classes=num_classes)
-        self.ce = nn.CrossEntropyLoss()
+        weights = None if class_weights is None else torch.as_tensor(class_weights, dtype=torch.float32)
+        self.dice = DiceLoss(num_classes=num_classes, class_weights=weights)
+        self.ce = nn.CrossEntropyLoss(weight=weights)
         self.dice_weight = dice_weight
         self.ce_weight = ce_weight
 
@@ -61,12 +82,21 @@ class FocalLoss(nn.Module):
 
 
 class TverskyLoss(nn.Module):
-    def __init__(self, num_classes: int = 4, alpha: float = 0.3, beta: float = 0.7, smooth: float = 1e-5) -> None:
+    def __init__(
+        self,
+        num_classes: int = 4,
+        alpha: float = 0.3,
+        beta: float = 0.7,
+        smooth: float = 1e-5,
+        class_weights: Sequence[float] | torch.Tensor | None = None,
+    ) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.alpha = alpha
         self.beta = beta
         self.smooth = smooth
+        weights = None if class_weights is None else torch.as_tensor(class_weights, dtype=torch.float32)
+        self.register_buffer("class_weights", weights, persistent=False)
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
@@ -76,6 +106,9 @@ class TverskyLoss(nn.Module):
         fp = torch.sum(probs * (1 - target_oh), dims)
         fn = torch.sum((1 - probs) * target_oh, dims)
         score = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
+        if self.class_weights is not None:
+            weights = self.class_weights.to(logits.device)[: self.num_classes]
+            score = score * weights / weights.clamp_min(1e-8).mean()
         return 1.0 - score.mean()
 
 
@@ -121,19 +154,90 @@ class TemporalSmoothnessLoss(nn.Module):
         return torch.mean(torch.abs(probs[:, 1:] - probs[:, :-1]))
 
 
+class CombinedClinicalSegmentationLoss(nn.Module):
+    """Weighted Dice + CE + Tversky with optional boundary regularization.
+
+    The name is "clinical" because the defaults emphasize foreground cardiac
+    structures, especially LV cavity and myocardium, while still optimizing a
+    standard segmentation target. It does not directly optimize LV volumes.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 4,
+        class_weights: Sequence[float] | torch.Tensor | None = None,
+        dice_weight: float = 1.0,
+        ce_weight: float = 1.0,
+        tversky_weight: float = 0.5,
+        boundary_weight: float = 0.0,
+        tversky_alpha: float = 0.3,
+        tversky_beta: float = 0.7,
+    ) -> None:
+        super().__init__()
+        if class_weights is None:
+            class_weights = [0.25, 1.0, 1.0, 1.0][:num_classes]
+        weights = torch.as_tensor(class_weights, dtype=torch.float32)
+        if weights.numel() != num_classes:
+            raise ValueError(f"class_weights must contain {num_classes} values, got {weights.numel()}.")
+        self.dice = DiceLoss(num_classes=num_classes, class_weights=weights)
+        self.ce = nn.CrossEntropyLoss(weight=weights)
+        self.tversky = TverskyLoss(num_classes=num_classes, alpha=tversky_alpha, beta=tversky_beta, class_weights=weights)
+        self.boundary = BoundaryLoss(num_classes=num_classes) if boundary_weight > 0 else None
+        self.dice_weight = float(dice_weight)
+        self.ce_weight = float(ce_weight)
+        self.tversky_weight = float(tversky_weight)
+        self.boundary_weight = float(boundary_weight)
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        loss = (
+            self.dice_weight * self.dice(logits, target)
+            + self.ce_weight * self.ce(logits, target.long())
+            + self.tversky_weight * self.tversky(logits, target)
+        )
+        if self.boundary is not None:
+            loss = loss + self.boundary_weight * self.boundary(logits, target)
+        return loss
+
+
+def parse_class_weights(value: Any, num_classes: int) -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [part.strip() for part in value.split(",") if part.strip()]
+    weights = [float(v) for v in value]
+    if len(weights) != num_classes:
+        raise ValueError(f"Expected {num_classes} class weights, got {len(weights)}.")
+    return weights
+
+
 def build_loss(name: str, num_classes: int = 4, **kwargs: Any) -> nn.Module:
     key = name.lower()
+    if "class_weights" in kwargs:
+        kwargs["class_weights"] = parse_class_weights(kwargs["class_weights"], num_classes)
     if key in {"dice", "dice_loss"}:
-        return DiceLoss(num_classes=num_classes, **kwargs)
+        allowed = {k: kwargs[k] for k in ("smooth", "include_background", "class_weights") if k in kwargs}
+        return DiceLoss(num_classes=num_classes, **allowed)
     if key in {"ce", "cross_entropy"}:
-        return nn.CrossEntropyLoss()
+        weights = None if kwargs.get("class_weights") is None else torch.as_tensor(kwargs["class_weights"], dtype=torch.float32)
+        return nn.CrossEntropyLoss(weight=weights)
     if key in {"dice_ce", "dice_cross_entropy"}:
-        return DiceCrossEntropyLoss(num_classes=num_classes)
+        return DiceCrossEntropyLoss(
+            num_classes=num_classes,
+            dice_weight=float(kwargs.get("dice_weight", 1.0)),
+            ce_weight=float(kwargs.get("ce_weight", 1.0)),
+            class_weights=kwargs.get("class_weights"),
+        )
     if key == "focal":
         return FocalLoss()
     if key == "tversky":
-        return TverskyLoss(num_classes=num_classes)
+        return TverskyLoss(
+            num_classes=num_classes,
+            alpha=float(kwargs.get("alpha", kwargs.get("tversky_alpha", 0.3))),
+            beta=float(kwargs.get("beta", kwargs.get("tversky_beta", 0.7))),
+            class_weights=kwargs.get("class_weights"),
+        )
     if key == "boundary":
         return BoundaryLoss(num_classes=num_classes)
+    if key in {"combined_clinical", "clinical", "combined"}:
+        return CombinedClinicalSegmentationLoss(num_classes=num_classes, **kwargs)
     raise ValueError(f"Unknown loss '{name}'.")
-

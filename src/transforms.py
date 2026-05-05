@@ -188,6 +188,17 @@ def elastic_deform(
     return np.stack(deformed, axis=0).astype(np.float32), mask_deformed.astype(np.int64)
 
 
+def translate_image_mask(
+    image: np.ndarray,
+    mask: np.ndarray,
+    shift_yx: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    shift_y, shift_x = shift_yx
+    shifted_image = _apply_to_channels(image, lambda ch: ndimage.shift(ch, shift=(shift_y, shift_x), order=1, mode="reflect"))
+    shifted_mask = ndimage.shift(mask, shift=(shift_y, shift_x), order=0, mode="nearest").astype(np.int64)
+    return shifted_image.astype(np.float32), shifted_mask
+
+
 @dataclass
 class SegmentationTransform:
     image_size: int | tuple[int, int] = 256
@@ -241,6 +252,20 @@ class SegmentationTransform:
         if scale_range:
             scale = float(rng.uniform(float(scale_range[0]), float(scale_range[1])))
             image, mask = _random_scale_crop_pad(image, mask, scale, rng)
+
+        translation_pixels = aug.get("translation_pixels", None)
+        translation_fraction = float(aug.get("translation_fraction", 0) or 0)
+        if translation_pixels is not None or translation_fraction > 0:
+            _, height, width = image.shape
+            if translation_pixels is None:
+                max_y = height * translation_fraction
+                max_x = width * translation_fraction
+            elif isinstance(translation_pixels, (list, tuple)):
+                max_y, max_x = float(translation_pixels[0]), float(translation_pixels[1])
+            else:
+                max_y = max_x = float(translation_pixels)
+            shift = (float(rng.uniform(-max_y, max_y)), float(rng.uniform(-max_x, max_x)))
+            image, mask = translate_image_mask(image, mask, shift)
 
         if rng.random() < float(aug.get("random_crop_prob", 0) or 0):
             crop_size = aug.get("random_crop_size", None)

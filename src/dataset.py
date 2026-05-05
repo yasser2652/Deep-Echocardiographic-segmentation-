@@ -499,6 +499,7 @@ class CamusDataset(Dataset):
             "view": sample.view,
             "phase": sample.phase,
             "spacing": sample.spacing if sample.spacing is not None else (1.0, 1.0),
+            "spacing_available": sample.spacing is not None,
             "image_path": str(sample.image_path),
             "mask_path": str(sample.mask_path) if sample.mask_path is not None else None,
             "sequence_path": str(sample.sequence_path) if sample.sequence_path is not None else None,
@@ -554,6 +555,7 @@ class ImageMaskDataset(Dataset):
             "view": sample.view,
             "phase": sample.phase,
             "spacing": sample.spacing if sample.spacing is not None else (1.0, 1.0),
+            "spacing_available": sample.spacing is not None,
             "image_path": str(sample.image_path),
             "mask_path": str(sample.mask_path) if sample.mask_path is not None else None,
             "sequence_path": None,
@@ -617,10 +619,8 @@ def make_split_samples(samples: list[CamusSample], config: dict[str, Any]) -> di
             train_fraction=float(config.get("train_fraction", 0.8)),
             val_fraction=float(config.get("val_fraction", 0.1)),
         )
-    return {
-        split: [sample for sample in samples if sample.patient_id in ids]
-        for split, ids in split_ids.items()
-    }
+    normalized = {split: {pid.lower() for pid in ids} for split, ids in split_ids.items()}
+    return {split: [sample for sample in samples if sample.patient_id.lower() in ids] for split, ids in normalized.items()}
 
 
 def make_split_image_samples(samples: list[ImageMaskSample], config: dict[str, Any]) -> dict[str, list[ImageMaskSample]]:
@@ -634,7 +634,8 @@ def make_split_image_samples(samples: list[ImageMaskSample], config: dict[str, A
             train_fraction=float(config.get("train_fraction", 0.8)),
             val_fraction=float(config.get("val_fraction", 0.1)),
         )
-    return {split: [sample for sample in samples if sample.patient_id in ids] for split, ids in split_ids.items()}
+    normalized = {split: {pid.lower() for pid in ids} for split, ids in split_ids.items()}
+    return {split: [sample for sample in samples if sample.patient_id.lower() in ids] for split, ids in normalized.items()}
 
 
 def has_generic_split_layout(root: str | Path) -> bool:

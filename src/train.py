@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", "--data-dir", "--data_dir", dest="data_root", default=None)
     parser.add_argument("--output-dir", "--save-dir", "--save_dir", dest="output_dir", default=None)
     parser.add_argument("--model", default=None)
+    parser.add_argument("--loss", default=None)
+    parser.add_argument("--class-weights", dest="class_weights", default=None, help="Comma-separated weights for background, LV, myocardium, LA.")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", dest="batch_size", type=int, default=None)
     parser.add_argument("--num-workers", dest="num_workers", type=int, default=None)
@@ -47,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume", default=None)
     parser.add_argument("--fold", type=int, default=None)
+    parser.add_argument("--split-file", dest="split_file", default=None)
     parser.add_argument("--mixed-precision", "--use-amp", dest="mixed_precision", action="store_true", default=None)
     parser.add_argument("--use-synthetic", dest="use_synthetic", action="store_true", default=None)
     parser.add_argument("--temporal-window", dest="temporal_window", type=int, default=None)
@@ -173,7 +176,10 @@ def main() -> None:
     )
 
     model = build_model_from_config(config).to(device)
-    criterion = build_loss(str(config.get("loss", "dice_ce")), num_classes=int(config.get("num_classes", 4))).to(device)
+    loss_params = dict(config.get("loss_params", {}) or {})
+    if config.get("class_weights") is not None:
+        loss_params["class_weights"] = config.get("class_weights")
+    criterion = build_loss(str(config.get("loss", "dice_ce")), num_classes=int(config.get("num_classes", 4)), **loss_params).to(device)
     optimizer = make_optimizer(model, config)
     scheduler = make_scheduler(optimizer, config)
     use_amp = bool(config.get("use_mixed_precision", True)) and device.type == "cuda"

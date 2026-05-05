@@ -19,6 +19,8 @@ def sample_image_mask(size: int = 64):
     [
         {"rotation_degrees": 12},
         {"scale_range": [0.85, 1.15]},
+        {"translation_fraction": 0.05},
+        {"translation_pixels": [3, 4]},
         {"random_crop_prob": 1.0, "random_crop_size": [40, 40]},
         {"horizontal_flip": True, "horizontal_flip_prob": 1.0},
         {"brightness": 0.15, "contrast": 0.15},
@@ -57,6 +59,8 @@ def test_prompt_augmentations_are_configurable_from_config_yaml():
         "horizontal_flip_prob",
         "rotation_degrees",
         "scale_range",
+        "translation_fraction",
+        "translation_pixels",
         "random_crop_prob",
         "random_crop_size",
         "brightness",
@@ -74,4 +78,3 @@ def test_prompt_augmentations_are_configurable_from_config_yaml():
         "gamma_range",
     }
     assert required_keys.issubset(augmentation)
-

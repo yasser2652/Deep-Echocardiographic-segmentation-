@@ -230,6 +230,18 @@ def read_split_file(path: PathLike) -> dict[str, set[str]]:
     if not split_path.exists():
         raise FileNotFoundError(f"Split file not found: {split_path}")
     splits = {"train": set(), "val": set(), "test": set()}
+    if split_path.is_dir():
+        for split in splits:
+            candidates = [split_path / f"{split}_patients.txt", split_path / f"{split}.txt"]
+            existing = next((candidate for candidate in candidates if candidate.exists()), None)
+            if existing is None:
+                continue
+            with existing.open("r", encoding="utf-8") as f:
+                for line in f:
+                    patient = line.strip()
+                    if patient and not patient.startswith("#"):
+                        splits[split].add(patient)
+        return splits
     if split_path.suffix.lower() == ".csv":
         import pandas as pd
 
@@ -250,8 +262,11 @@ def read_split_file(path: PathLike) -> dict[str, set[str]]:
             if not line or line.startswith("#"):
                 continue
             parts = line.replace(",", " ").split()
-            if len(parts) < 2:
-                raise ValueError(f"Invalid split line: {line}")
+            if len(parts) == 1:
+                raise ValueError(
+                    f"Invalid split line: {line}. Single-patient lines are supported in "
+                    "train_patients.txt/val_patients.txt/test_patients.txt inside a split directory."
+                )
             split, patient = parts[0].lower(), parts[1]
             if split not in splits:
                 raise ValueError(f"Unknown split '{split}' in {split_path}")

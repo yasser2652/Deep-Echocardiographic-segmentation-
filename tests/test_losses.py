@@ -1,6 +1,6 @@
 import torch
 
-from src.losses import BoundaryLoss, DiceCrossEntropyLoss, DiceLoss, FocalLoss, TverskyLoss
+from src.losses import BoundaryLoss, CombinedClinicalSegmentationLoss, DiceCrossEntropyLoss, DiceLoss, FocalLoss, TverskyLoss, build_loss
 
 
 def test_losses_forward_pass():
@@ -12,7 +12,8 @@ def test_losses_forward_pass():
         FocalLoss(),
         TverskyLoss(num_classes=4),
         BoundaryLoss(num_classes=4),
+        CombinedClinicalSegmentationLoss(num_classes=4, class_weights=[0.2, 1.0, 1.2, 1.0]),
+        build_loss("combined_clinical", num_classes=4, class_weights="0.2,1.0,1.2,1.0"),
     ]:
         loss = loss_fn(logits, target)
         assert torch.isfinite(loss)
-
