@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", "--data-dir", "--data_dir", dest="data_root", default=None)
     parser.add_argument("--output-dir", "--save-dir", "--save_dir", dest="output_dir", default=None)
     parser.add_argument("--model", default=None)
+    parser.add_argument("--pretrained", action="store_true", default=None, help="Use ImageNet pretrained encoder weights when the selected model supports them.")
+    parser.add_argument("--no-pretrained", dest="pretrained", action="store_false", help="Disable pretrained encoder weights.")
     parser.add_argument("--loss", default=None)
     parser.add_argument("--class-weights", dest="class_weights", default=None, help="Comma-separated weights for background, LV, myocardium, LA.")
     parser.add_argument("--epochs", type=int, default=None)

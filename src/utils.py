@@ -63,6 +63,10 @@ def update_config_from_args(config: dict[str, Any], args: argparse.Namespace) ->
             updated["use_mixed_precision"] = bool(value)
         elif key == "use_synthetic":
             updated["use_synthetic"] = bool(value)
+        elif key == "pretrained":
+            params = dict(updated.get("model_params", {}) or {})
+            params["pretrained"] = bool(value)
+            updated["model_params"] = params
         else:
             updated[key] = value
     if updated.get("learning_rate") is not None and arg_values.get("lr") is None:

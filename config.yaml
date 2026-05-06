@@ -46,6 +46,7 @@ model_params:
   base_channels: 32
   batch_norm: true
   dropout: 0.1
+  pretrained: false
 
 augmentation:
   enabled: true

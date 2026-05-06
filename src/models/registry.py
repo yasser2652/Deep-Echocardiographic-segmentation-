@@ -110,7 +110,7 @@ def build_model_from_config(config: dict[str, Any]) -> nn.Module:
         base_channels=int(params.get("base_channels", 32)),
         batch_norm=bool(params.get("batch_norm", True)),
         dropout=float(params.get("dropout", 0.0)),
-        pretrained=bool(params.get("pretrained", params.get("imagenet_pretrained", False))),
+        pretrained=bool(params.get("pretrained", params.get("imagenet_pretrained", config.get("pretrained", False)))),
         temporal_window=temporal_window,
         temporal_attention=bool(config.get("temporal_attention", False)),
     )
